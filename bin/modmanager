@@ -1,0 +1,580 @@
+#!/usr/bin/env node
+
+"use strict";
+
+const fs = require('fs-extra');
+const path = require('path');
+const _ = require('underscore');
+const cli = require('minimist');
+const inquirer = require('inquirer');
+const async = require('async');
+const color = require('colors');
+const dirs = require('node-dir');
+const nedb = require('nedb')
+
+const helper = require('./../helper');
+const app = require('./app')
+
+const db = new nedb({
+
+	filename : `${__dirname}/data/database.json`,
+	autoload: true
+})
+
+color.setTheme({
+  silly: 'rainbow',
+  input: 'grey',
+  verbose: 'cyan',
+  prompt: 'grey',
+  info: 'green',
+  data: 'grey',
+  help: 'cyan',
+  warn: 'yellow',
+  debug: 'blue',
+  error: 'red'
+});
+
+var debug = true;
+var args = cli(process.argv.slice(2));
+var mods = [];
+var workingDir = process.cwd();	
+
+let userSetting;
+let duplicateMods;
+let listMods;
+
+function initModule() {
+
+	const templateUserSetting = {name: 'userSetting', value:{
+
+		duplicateMods : true
+	}}
+
+	fs.ensureDir(__dirname + '/mods')
+	fs.ensureDir(`${__dirname}/data`, function (){})
+	fs.ensureFile(`${__dirname}/data/database.json`, function (){})
+
+	function loadUserSetting() {
+
+		return new Promise((resolve, reject) => {
+
+			db.findOne({name : 'userSetting'}, function (err, data){
+			  if(err) {
+
+			  	throw err(err)
+			  }
+
+			  if(!data) {
+
+			  	db.insert(templateUserSetting, function (err, data){
+				   if(err) {
+
+				   	throw err(err)
+				   }
+
+				   duplicateMods = true
+
+				   resolve(data)
+			  	})
+			  } else {
+
+			  	resolve(data)
+			  }
+			})
+		})
+	}
+
+	function loadListMods() {
+
+		return new Promise(resolve => {
+
+			db.findOne({name: 'listMods'}, function (err, data) {
+
+			  if(err) {
+
+			      console.error(err)
+
+			      return false
+			  }
+
+			  if(data) {
+
+			  	// listMods = data
+			  	resolve(data)
+			  } else {
+			  
+			  	db.insert({name: 'listMods', value : []}, function (err, data) {
+			  	
+				    if(err) {
+				
+				        console.error(err);
+				
+				        return false
+				    }
+				
+				    // listMods = data
+				    resolve(data)
+			  	})
+			  }
+			})
+		})
+	}
+
+	return loadUserSetting().then(function (data){
+   userSetting = data
+
+   return loadListMods()
+	}, function (err){
+	   throw err(err)
+	}).then(function (data){
+    listMods = data
+	}, function (err){
+    throw err(err)
+	})
+}
+
+initModule().then(function (data){
+
+   duplicateMods = userSetting.value.duplicateMods   
+
+   parseArgs()
+}, function (err){
+   console.error(err);
+})
+
+function parseArgs() {
+
+	if(args._)
+	{
+		var otherArgs = _.map(args._, function(arg){ var a = {}; a[arg] = true; return a; })
+
+		_.each(otherArgs, function(value, key)
+		{
+			_.extend(args, value);
+		})
+	}
+
+	/**
+	 * get current version
+	 */
+	if(args.version || args.V)
+	{
+		fs.readJson(__dirname + '/../package.json', function(err, obj)
+		{
+			console.log('')
+			console.log(obj.name + ' v' + obj.version)
+		})
+	}
+
+	/**
+	 * creating first time
+	 */
+	else if(args.init)
+	{
+		var workingDir = process.cwd();	
+
+		fs.exists(workingDir + '/modmanager.json', function(exists)
+		{
+			if(!exists)
+			{
+				fs.writeJsonSync(workingDir + '/modmanager.json', {installed:[]});
+
+				console.log('modmanager.json created'.info)
+			}
+		})
+	}
+
+	/**
+	 * Search Available Mod(s)
+	 */
+	else if(args.search || args.S)
+	{
+		var query = args.search || args.S;
+
+		if(typeof query == 'boolean' && query)
+		{
+			query = '*';
+		}
+
+		var result = app.searchMod(query);
+
+		if(result)
+		{
+			console.log('')
+			console.log('Mod(s) Found : '.info)
+
+			_.each(result, function(value, key)
+			{
+				console.log(' - ' + value)
+			})
+		}
+	}
+
+	/**
+	 * install a mod
+	 */
+	else if(args.install || args.I)
+	{
+		var mod = args.install || args.I;
+		var workingDir = process.cwd();
+		var toInstall = [];
+
+		var install = function(mods)
+		{
+			_.each(mods, function(value, key)
+			{
+				var dir = __dirname + '/../mods/' + value;
+
+				fs.exists(dir, function(exists)
+				{
+					if(!exists)
+					{
+						console.log('')
+						console.log('mod not found'.error);
+						console.log('you can search available mod(s) with --search=' + value + ' or -S ' + value)
+						console.log('or -S to see all available mod(s)')
+
+						return false;
+					}
+
+					dirs.paths(dir, true, function(err, files)
+					{
+						if(err)
+						{
+							throw err;
+						}
+
+						_.each(files, function(value, key)
+						{
+							var target = fs.realpathSync(value).toString().replace(fs.realpathSync(dir), '');
+
+							fs.copySync(value, workingDir + '/' + target);
+						})
+
+						fs.exists(workingDir + '/modmanager.json', function(exists)
+						{
+							var modmanagerConf = {};
+
+							if(exists)
+							{
+								modmanagerConf = fs.readJsonSync(workingDir + '/modmanager.json');
+							}
+
+							var currentMod = modmanagerConf.installed || [];
+
+							currentMod.push(value.toLowerCase());
+
+							modmanagerConf.installed = _.union(currentMod, [value.toLowerCase()]);
+
+							fs.writeJsonSync(workingDir + '/modmanager.json', modmanagerConf);
+
+							console.log('')
+							console.log(value + ' installed'.info)
+						})
+					})
+				})
+			})
+		}
+
+		if(typeof mod == 'boolean' && mod)
+		{
+			var mods = app.searchMod('*');
+
+		} else {
+
+			var mods = app.searchMod(mod);
+		}
+
+		var questions = [];
+
+		questions.push({
+
+			type:'checkbox',
+			name:'modToInstall',
+			message:'select 1 or more mod(s) to install',
+			choices:mods
+
+		});
+
+		inquirer.prompt(questions, function(answers)
+		{
+			if(answers.modToInstall)
+			{
+				toInstall = answers.modToInstall;
+
+				var info = app.getInfo();
+
+				if(!info)
+				{
+					app.init();
+				}
+
+				install(toInstall)
+			}
+		})
+	}
+
+	else if (args.uninstall || args.U)
+	{
+		var modName = args.uninstall || args.U;
+		var modFiles = [];
+		var toUninstall = [];
+		var installed = false;
+		var conf = app.getInfo();
+
+		console.log('')
+
+		if(!conf)
+		{
+			console.log('modmanager.json not found'.error)
+			console.log('run with --init or init to create modmanager.json'.info)
+
+			return false;		
+		}
+
+		var uninstallMod = function(mods)
+		{
+			_.each(mods, function(value, key)
+			{
+				var dirMod = __dirname + '/../mods/' + value;
+
+				dirs.paths(dirMod, function(err, files)
+				{
+					if(err)
+					{
+						throw err;
+					}
+
+					async.series([
+
+						function(callback)
+						{
+							_.each(files.files, function(_value, _key)
+							{
+								var target = _value.toString().replace(fs.realpathSync(dirMod), '');
+
+								fs.remove(workingDir + target, function(err)
+								{
+									if(err)
+									{
+										throw err;
+									}
+								})
+							})
+
+							callback(null, 1)
+						}, 
+
+						function(callback)
+						{
+							_.each(files.dirs, function(_value, _key)
+							{
+								var target = _value.toString().replace(fs.realpathSync(dirMod), '');
+
+								dirs.paths(workingDir + target, function(err, _files)
+								{
+									if(err)
+									{
+										console.log(err)
+
+										return false;
+									}
+
+									if(_.isEmpty(_files.files))
+									{
+										fs.remove(workingDir + target, function(err)
+										{
+											if(err)
+											{
+												throw err;
+											}
+										})
+									}
+								})
+							})
+
+							callback(null, 2)
+						}
+
+					], function(q)
+					{
+
+					})
+
+					var newMods = (_.without(conf.installed, value.toLowerCase()))
+
+					conf.installed = newMods;
+
+					fs.writeJsonSync(workingDir + '/modmanager.json', conf);
+
+					console.log(value + ' uninstalled'.info)
+				})
+
+			})
+		}
+
+		if(typeof modName == 'boolean' && modName)
+		{
+			if(_.isEmpty(conf.installed))
+			{
+				console.log('')
+				console.log('no mod installed'.error)
+
+				return false;
+			}
+
+			var questions = [];
+
+			questions.push(
+			{
+				type: 'checkbox',
+				name: 'toUninstall',
+				message: 'select 1 or more mod(s) to uninstall',
+				choices: conf.installed
+			})
+
+			inquirer.prompt(questions, function(answers)
+			{
+				if(answers.toUninstall)
+				{
+					toUninstall = answers.toUninstall;
+
+					uninstallMod(toUninstall)
+				}
+			})
+
+		} else {
+
+			toUninstall = [modName];
+
+			uninstallMod(toUninstall)
+		}
+
+		return false;
+	}
+
+	/**
+	 * add current directory to mod list
+	 * that can be installed
+	 */
+	else if(args.addmod || args.A)
+	{
+		var workingDir = process.cwd();
+		var modName = args.name || args.N || args.addmod || args.A;
+		var modDir = __dirname + '/../mods';
+		var modExist = false;
+
+		var addMod = function()
+		{
+
+			// db.findOne({}}, function (err, data){
+			//    if(err) {
+
+			//    	throw new Error(err)
+
+			//    	return
+			//    }
+
+			//    console.log(data)
+
+			//    if(!data) {
+
+			//    	db.update({_id : listMods._id}, {$push: {value: {name: modName, path: (duplicateMods) ? `${modDir}/${modName}` : workingDir}}}, {}, function (err, data){
+			//    	   // console.log(data)
+			//    	})
+			//    }
+			// })
+
+			// return
+			dirs.paths(workingDir, true, function(err, files)
+			{
+				if(err)
+				{
+					throw err;
+				}
+
+				_.each(files, function(value, key)
+				{
+					var target = fs.realpathSync(value).toString().replace(fs.realpathSync(workingDir), '');
+
+					fs.copySync(value, modDir + '/' + modName + target);
+				})
+
+				console.log('')
+
+				if(modExist)
+				{
+					console.log('Updating ' + modName + ' mod')
+
+				} else {
+					
+					console.log('Mod Added with name : ' + modName)
+				}
+			})
+		}
+
+		if(typeof modName !== 'string')
+		{
+			var modDirName = workingDir.split(path.sep);
+
+			modName = (_.last(modDirName));
+		}
+
+		fs.exists(modDir + '/' + modName, function(exists)
+		{
+			if(exists)
+			{
+				modExist = true;
+
+				fs.remove(modDir + '/' + modName, function(err)
+				{
+					if(err)
+					{
+						throw err;
+					}
+
+					fs.ensureDirSync(modDir + '/' + modName)
+
+					addMod();
+				})
+
+			} else {
+
+				fs.ensureDirSync(modDir + '/' + modName)
+
+				addMod();
+			}
+		})
+	}
+
+	/**
+	 * get info of current working dir
+	 */
+	else if (args.info)
+	{
+		console.log('')
+
+		var conf = app.getInfo(true);
+
+		if(!conf)
+		{
+			console.log('cannot retrieve mod(s) information')
+		}
+
+		console.log('Installed Mod(s) : ')
+
+		_.each(conf.installed, function(value, key)
+		{
+			console.log(' - ' + value);
+		})
+	}
+
+	/**
+	 * no valid argument found
+	 */
+	else {
+
+		console.log('')
+		console.log('no valid arguments found')
+	}
+}
