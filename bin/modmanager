@@ -15,11 +15,7 @@ const nedb = require('nedb')
 const helper = require('./../helper');
 const app = require('./app')
 
-const db = new nedb({
-
-	filename : `${__dirname}/data/database.json`,
-	autoload: true
-})
+const CONFIG_PATH = `${__dirname}/config.json`
 
 color.setTheme({
   silly: 'rainbow',
@@ -42,6 +38,7 @@ var workingDir = process.cwd();
 let userSetting;
 let duplicateMods;
 let listMods;
+let config;
 
 function initModule() {
 
@@ -51,96 +48,25 @@ function initModule() {
 	}}
 
 	fs.ensureDir(__dirname + '/mods')
-	fs.ensureDir(`${__dirname}/data`, function (){})
-	fs.ensureFile(`${__dirname}/data/database.json`, function (){})
+	fs.ensureFile(CONFIG_PATH, function (err){})
 
-	function loadUserSetting() {
+	try {
 
-		return new Promise((resolve, reject) => {
+		config = require(CONFIG_PATH)
 
-			db.findOne({name : 'userSetting'}, function (err, data){
-			  if(err) {
+	} catch (e) {0
 
-			  	throw err(err)
-			  }
+		fs.writeJsonSync(CONFIG_PATH, {
 
-			  if(!data) {
-
-			  	db.insert(templateUserSetting, function (err, data){
-				   if(err) {
-
-				   	throw err(err)
-				   }
-
-				   duplicateMods = true
-
-				   resolve(data)
-			  	})
-			  } else {
-
-			  	resolve(data)
-			  }
-			})
+			duplicateMods : true,
+			mods : new Map()
 		})
 	}
-
-	function loadListMods() {
-
-		return new Promise(resolve => {
-
-			db.findOne({name: 'listMods'}, function (err, data) {
-
-			  if(err) {
-
-			      console.error(err)
-
-			      return false
-			  }
-
-			  if(data) {
-
-			  	// listMods = data
-			  	resolve(data)
-			  } else {
-			  
-			  	db.insert({name: 'listMods', value : []}, function (err, data) {
-			  	
-				    if(err) {
-				
-				        console.error(err);
-				
-				        return false
-				    }
-				
-				    // listMods = data
-				    resolve(data)
-			  	})
-			  }
-			})
-		})
-	}
-
-	return loadUserSetting().then(function (data){
-   userSetting = data
-
-   return loadListMods()
-	}, function (err){
-	   throw err(err)
-	}).then(function (data){
-    listMods = data
-	}, function (err){
-    throw err(err)
-	})
 }
 
-initModule().then(function (data){
+initModule()
 
-   duplicateMods = userSetting.value.duplicateMods   
-
-   parseArgs()
-}, function (err){
-   console.error(err);
-})
+parseArgs()
 
 function parseArgs() {
 
@@ -241,7 +167,7 @@ function parseArgs() {
 					{
 						if(err)
 						{
-							throw err;
+							throw new Error(err);
 						}
 
 						_.each(files, function(value, key)
@@ -342,7 +268,7 @@ function parseArgs() {
 				{
 					if(err)
 					{
-						throw err;
+						throw new Error(err);
 					}
 
 					async.series([
@@ -357,7 +283,7 @@ function parseArgs() {
 								{
 									if(err)
 									{
-										throw err;
+										throw new Error(err);
 									}
 								})
 							})
@@ -386,7 +312,7 @@ function parseArgs() {
 										{
 											if(err)
 											{
-												throw err;
+												throw new Error(err);
 											}
 										})
 									}
@@ -463,42 +389,43 @@ function parseArgs() {
 		var modName = args.name || args.N || args.addmod || args.A;
 		var modDir = __dirname + '/../mods';
 		var modExist = false;
+		var duplicateMods = config.duplicateMods
+
+		if(args.duplicate) {
+
+			if(args.duplicate.toLowerCase() == 'yes') {
+
+				duplicateMods = true
+			} else if(args.duplicate.toLowerCase() == 'no') {
+
+				duplicateMods = false
+			}
+		}
 
 		var addMod = function()
 		{
 
-			// db.findOne({}}, function (err, data){
-			//    if(err) {
-
-			//    	throw new Error(err)
-
-			//    	return
-			//    }
-
-			//    console.log(data)
-
-			//    if(!data) {
-
-			//    	db.update({_id : listMods._id}, {$push: {value: {name: modName, path: (duplicateMods) ? `${modDir}/${modName}` : workingDir}}}, {}, function (err, data){
-			//    	   // console.log(data)
-			//    	})
-			//    }
-			// })
-
-			// return
 			dirs.paths(workingDir, true, function(err, files)
 			{
 				if(err)
 				{
-					throw err;
+					throw new Error(err);
 				}
 
-				_.each(files, function(value, key)
-				{
-					var target = fs.realpathSync(value).toString().replace(fs.realpathSync(workingDir), '');
+				if(duplicateMods) {
 
-					fs.copySync(value, modDir + '/' + modName + target);
-				})
+					_.each(files, function(value, key)
+					{
+						var target = fs.realpathSync(value).toString().replace(fs.realpathSync(workingDir), '');
+
+						fs.copySync(value, modDir + '/' + modName + target);
+					})
+
+					config.mods[modName] = fs.realpathSync(`${modDir}\\${modName}`)
+				} else {
+
+					config.mods[modName] = fs.realpathSync(workingDir)
+				}
 
 				console.log('')
 
@@ -510,6 +437,8 @@ function parseArgs() {
 					
 					console.log('Mod Added with name : ' + modName)
 				}
+
+				fs.writeJsonSync(CONFIG_PATH, config)
 			})
 		}
 
@@ -530,7 +459,7 @@ function parseArgs() {
 				{
 					if(err)
 					{
-						throw err;
+						throw new Error(err);
 					}
 
 					fs.ensureDirSync(modDir + '/' + modName)

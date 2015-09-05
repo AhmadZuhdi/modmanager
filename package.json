@@ -1,6 +1,6 @@
 {
   "name": "ModManager",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "ModManager or FileManager",
   "bin": {
     "modmanager": "bin/modmanager"

@@ -1,2 +1,4 @@
 node_modules/
 mods/
+bin/config.json
+bin/data/
